@@ -25,7 +25,7 @@ library(tidyverse) #we want to load this second in order for its functions
 library(ggplot2)
 ```
 
-Download the "aid_data_95_ee.csv" in the Labs folder on Sakai and then read it into R:
+Download the "aid_data_95_ee.csv" in the Lab 4 folder on GitHub and then read it into R:
 ```{r, warning = F, message = F}
 #remember to set your working directory!
 setwd("/Users/IsabelLaterzo/Dropbox/Poli784_2021/Labs/Lab4_SimulationUncertainty")
