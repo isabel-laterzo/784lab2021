@@ -1,0 +1,218 @@
+---
+title: 'Lab 6 - Missing Data and Imputation'
+author: "TA: Isabel Laterzo"
+date: "March 3, 2021"
+header-includes:
+  - \usepackage{enumerate}
+  - \usepackage{graphicx}
+output: pdf_document
+---
+
+This week we will be learning ways to handle missing data. Often times you will come across, or collect, data with a significant amount of missingness across variables of interest. If the amount of data is quite small, typically you can ignore it. However, you will likely come across cases where your data has a pretty significant amount of missingness. A common rule of thumb for "too much" missingness - indicating you need to deal with it in some way - is if > 5% of your data is missing. 
+
+Today, we will be examining how we would deal with data that has a significant amount of missingness. We will walk through listwise deletion, mean/median/mode substitution, and something called "imputation." 
+
+**Data!**
+First, let's get our data set up. 
+```{r}
+#clear global environ
+rm(list=ls())
+
+#load in airquality data
+data_clean <- airquality
+summary(data_clean)
+
+#here's our "true model" for future reference
+model_true <- lm(Temp~ Ozone + Solar.R + Wind, data = data_clean)
+
+#lets copy this df and then add some missingness
+data_miss <- data_clean
+data_miss[4:9,3] <- rep(NA,6)
+data_miss[1:8,4] <- NA
+summary(data_miss) #check out those *~* NAs ~*~
+```
+
+Alright, let's take a look at those NA's more deeply
+```{r}
+#what does this do?
+is.na(data_miss$Ozone)
+
+#and this?
+which(is.na(data_miss$Ozone))
+
+#and this?
+sum(is.na(data_miss$Ozone))
+
+#apply this to other variables!
+
+#An easy way to look at this across the whole DF
+colSums(is.na(data_miss))
+```
+
+**Listwise Deletion**
+Some people just delete the observations with missing values. Although this is definitely a viable approach, depending on how much missing data you have, you might be getting rid of a lot of information!
+
+Below, use the function `na.omit()` to get rid of observations with missing values, then repeat the above `lm()` model with this new data.
+```{r, eval = FALSE}
+# subset with complete.cases to get complete cases
+data_listwise <- na.omit(_____)
+summary(data_listwise)
+
+#let's create an lm with this model to compare to later iterations
+#model Temp as your y, Ozone, Solar.R, and Wind as your x values
+model_listwise <- lm(_______________, data = _________)
+
+summary(____________)
+```
+
+
+**Mean/Median Recoding**
+
+Alternatively, we can replace missing values with other values - such as the mean, median, or mode. Mode is appropriate if you're dealing with categorical variables, but since we're dealing with continuous here, we'll use one of the others. 
+
+Although this is a pretty easy approach, mean/median recoding decreases and changes the variance of your data. Especially in the case of time series data, this might not be great - we might be replacing a value with a mean of *all* the existing values, instead of one appropriate for the time period it belongs to! But, let's try it anyways.
+
+```{r, eval = FALSE}
+#make a copy of the data
+data_recode <- data_miss
+
+#uses if else statements to recode NA values as the mean of the rest of that column
+data_recode$Ozone <- ________________________
+
+data_recode$Solar.R <- ________________________
+
+data_recode$Wind <- __________________________
+
+data_recode$Temp <- _________________________
+                          
+#summarize
+summary(data_recode)
+
+
+#linear model (same as above, but rename "model_recode")
+model_recode <- lm(Temp~ Ozone + Solar.R + Wind, data = data_recode)
+
+summary(model_recode)
+```
+
+**Multiple Imputation**
+
+Now multiple imputation, a super useful technique. First, we'll discuss `mice`. This package uses multivariate imputations to estimate missing values. What does this mean? Well, if a value is identified as missing, the package will then regress over the other variables and predict the various missing values. This is pretty cool. Further, using *multiple* imputations, or iterations of this process, instead of just one, helps us reduce uncertainty. 
+
+Let's take a look!
+
+
+```{r, eval = FALSE}
+library(mice) #mice package
+library(VIM) #visualization
+
+#mice's df visualization
+md.pattern(data_miss)
+
+#vis using aggr() from VIM
+aggr_plot <- aggr(data_miss, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE,
+                  labels=names(data_miss), cex.axis=.7, gap=3,
+                  ylab=c("Histogram of missing data","Pattern"))
+#what is this showing us?
+
+#MICE TIME
+mice_data <- mice(data_miss, #call our data
+                  m=5, #number of multiple imputations
+                  maxit=50, #number of iterations
+                  # method = ? mice will decide the most appropriate method based on your data
+                  seed=500)
+
+summary(mice_data)
+
+
+#try this out with 25 iterations and 10 imputations
+#select animputation method (try pmm) - what does it do differently?
+mice_data_2 <- mice(_____________)
+
+summary(mice_data_2)
+```
+
+So this is great, but then what do we do if we want to run a model? We have five data sets. One option is to pool the data this way:
+```{r, eval = FALSE}
+#pooling
+model_mice <- with(mice_data,lm(Temp~ Ozone + Solar.R + Wind))
+summary(pool(model_mice))
+```
+So mice is great. Let's also learn about Amelia II (my personal favorite, named after Amelia Earhart, because she is missing). Amelia is a little different because it assumes that your data is jointly distributed as multivariate normal. It uses the "expectation-maximization with bootstrapping" as an algorithm for imputation. The EM algorithm alternates between something called the expectation (E-step) and maximization (M-step) steps until it converges on values that were missing - it converges when the current and previous values are quite close (sounds a bit like Newton Raphson, no?). It brings in bootstraping by doing this process on multiple bootstrapped samples drawn from your original (and incomplete) data. 
+
+Great, let's try it out. Examine the function by calling `?amelia()` - look at the different arguments. Notice that Amelia can handle time series data uniquely. Let's factor that in by creating a running time variable. 
+
+```{r, message = FALSE}
+library(Amelia)
+library(lubridate)
+library(mice) #for the pool function
+
+#create running time variable, lets just assume we're in 2021
+data_miss$time <- make_datetime(month = data_miss$Month,
+                                day = data_miss$Day,
+                                year = 2021)
+
+#impute
+amelia_data <- amelia(x = data_miss,
+                 m = 5,
+                 time = "time")
+
+
+#let's run the model again, but this time using a for loop
+models_amelia <- vector("list", 5)  #vector for our 5 newly imputed data sets
+
+for(i in 1:5){
+  models_amelia[[i]] <- lm(Temp ~ Ozone + Solar.R + Wind,
+                        data=amelia_data$imputations[[i]]) #why do we index like this?
+}
+
+summary(pool(models_amelia))
+```
+
+Compare how models from mice, Amelia, and the above methods perform to our true data:
+```{r, eval = FALSE}
+#true model
+summary(model_true)
+
+#listwise
+summary(model_listwise)
+
+#recoding
+summary(model_recode)
+
+#mice
+summary(pool(model_mice))
+
+#Amelia
+summary(pool(models_amelia))
+```
+
+**On your own:**
+
+Try Amelia again, but this time let's use more of its functionality. Read in data from the `africa` package and examine its missingness. Then, using Amelia, impute missing values. Note that the dataset is cross-sectional by country, time series by year, and should have the `gdp_pc` variable specified as logged.
+
+After imputing the data, write a linear model that evaluates the effect of `infl`, `trade`, `civlib` and `population` on `gdp_pc`. Report the pooled results!
+
+```{r, eval = FALSE}
+library(Amelia)
+data("africa") #read in
+
+#explore missingness
+
+
+
+#use Amelia to generate 5 imputed datasets
+#use ts and cs so imputation algs knows countries and years
+africa_imp <- amelia(_____________________)
+
+
+models_africa <- vector(__)
+for(i in 1:length(africa_imp$imputations)){
+  __________________________________) 
+}
+
+#report results, including standard errors
+
+```
+
+
