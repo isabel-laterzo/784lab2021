@@ -1,0 +1,174 @@
+---
+title: 'Lab 8 Answer Key and Note on Average-Case and Observed-Case Approachs'
+author: "Simon Hoellerbauer"
+date: "March 6, 2019"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls()) # clear workspace
+setwd('E:/Dropbox/Labs') # change to wherever you saved the data
+set.seed(18765) # set seed for replication
+library(tidyverse) #for data manipulation
+library(haven) #for importing data
+```
+
+
+# Assignment
+
+Install and load the package 'Zelig.' Call the data 'turnout.' Fit a logit model that predicts voting based on race, education and income. 
+
+Now, fit a second model that predicts voting based on race, education, income, and age. Assume that you've hypothesized that age has a curvilinear relationship with voting turnout, such that lower ages and higher ages are less likely to vote. Include this tranformed variable.
+
+Compare the model fit of these two options. Which do you choose?
+
+Simulate and plot predicted probabilities over the range of age, holding all other variables at their mean, including confidence intervals, for the second model. Plot this.
+
+Generate an average predicted effect over the observed values of income for the first model. Plot this.
+
+Required packages and data:
+```{r, message=FALSE}
+library(ggplot2)
+library(arm)
+library(lmtest)
+library(Zelig)
+data('turnout')
+```
+
+
+First, we fit the models:
+```{r}
+m1 <- glm(vote ~ race + educate + income, turnout, family = binomial(link = 'logit'))
+m2 <- glm(vote ~ race + educate + income + poly(age, 2, raw = T), turnout, 
+          family = binomial(link = 'logit'))
+
+lrtest(m1, m2)
+AIC(m1)
+AIC(m2)
+BIC(m1)
+BIC(m2)
+```
+
+# Average-Case Approach
+
+When we combine the average-case approach with simulation, we create a hypothetical design matrix, where we hold all continuous variables at their mean or another justifiable value, and then let the predictor of interest vary along some range. 
+
+
+```{r}
+sim_dat <- with(turnout, data.frame(intercept = 1, race = 1,
+                                    educate = mean(educate), income = mean(income),
+                                    age = seq(min(age), max(age), length.out = 100),
+                                    age2 = (seq(min(age), max(age), length.out = 100))^2))
+```
+
+In order to simulate different betas, we take a predetermined number of draws (1000 in this case here) from a multi-variate normal distribution centered around the coefficient estimates from our model, with a variance-covariance matrix also from our model. We then matrix multiply our hypothetical design matrix with our simulated betas. This means that we will have 1000 different predicted probabilities for each row in our hypothetical design matrix (in other words, we have 1000 different predicted probabilities for each element of the vector of values for our predictor of interest). We then have to make sure that we take the mean, and the quantiles we are interested in, along whichever dimension represents the elements of the hypothetical range vector. We can do this using `apply`. Note that in the example below, we are using `apply` along the rows of `sim_pp` because of how we constructed `sim_pp` (also using `apply`.) If we had not used `apply` and had instead simply done `as.matrix(sim_dat) %*% sim_betas`, the dimensions of `sim_pp` would have been reversed, and we would have to `apply` the mean and quantile functions along the columns, not the rows. 
+```{r}
+sim_betas <- mvrnorm(1e3, coef(m2), vcov(m2))
+
+sim_pp <- apply(sim_betas, 1, function(x) invlogit(as.matrix(sim_dat) %*% x))
+
+sim_gg <- data.frame(age = sim_dat$age, pe = apply(sim_pp, 1, mean),
+                     lo = apply(sim_pp, 1, quantile, probs = .025),
+                     hi = apply(sim_pp, 1, quantile, probs = .975))
+```
+
+We can plot the predicted probabilities and our confidence bands.
+```{r}
+ggplot(sim_gg, aes(x = age, y = pe, ymin = lo, ymax = hi)) +
+  geom_ribbon(aes(fill = '95% Confidence Interval'), alpha = .5) +
+  geom_line(aes(color = 'Predicted Probability')) +
+  labs(x = 'Age', y = 'Probability of Turnout') +
+  theme_bw() +
+  theme(legend.title = element_text(), legend.position = 'bottom',
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank()) +
+  scale_fill_manual('', values = 'dodgerblue4') +
+  scale_color_manual('', values = 'grey30')
+```
+
+# Observed-Case Approach
+
+When taking the observed-case approach (see Hanmer and Kalkan (2013) for why this is the preferable approach) and using simulation to get confidence intervals, we have to do things slightly differently. Specifically, we will have to take an addition mean. This is because whereas in the average-case approach, we had one row for each hypothetical value of our predictor of interest (however long we decided to make it), in the observed-case approach, we will have a whole matrix or dataframe for each hypothetical value of our predictor of interest.
+
+We start by creating a temporary design matrix. This while start out as being the same exact design matrix used to fit the model, which is why we can just use `model.matrix()` on our model object.
+
+```{r}
+temporary <- model.matrix(m1)
+```
+
+We then have to make sure to once again simulate our betas, using our model object.
+```{r}
+#getting sim betas for m1
+sim_betas_m1 <- mvrnorm(1e3, coef(m1), vcov(m1))
+```
+
+Just like with the average-case approach, we have to create the values we want our predictor of interest (*income* in this case) to take on. Just like in the average-case approach, these are really hypothetical values. Here, we will let income vary from its min to its max.
+```{r}
+#getting range of income
+income_vec <- seq(from = min(turnout$income), to = max(turnout$income),
+                  length.out = 100)
+```
+
+In the next step, we do several important things at once. We will do these things using the `map_dfc` function from `purrr` (part of the tidyverse). This works a lot like the `apply` family of functions, but is somewhat faster. It maps a function to a vector and then, because of the `_dfc` suffix, column binds the results of the function together. In other words, we apply the function to each element in the vector, and then (because the function returns a vector) we get a dataframe in as output. Note that we could do something similar with `lapply`, but then we would get a list of vectors.
+
+```{r}
+pp <- map_dfc(income_vec, function(j) {
+    temporary[, "income"] <- j
+    
+    pp <- invlogit(temporary %*% t(sim_betas_m1))
+    
+    pp <- apply(pp, 2, mean)
+  
+    return(pp)
+    })
+```
+
+
+The function we apply to each element of our hypothetical predictor value vector does a few things:
+1. It takes the temporary design matrix we created above, and then replaces *all* of the values of our predictor of interest with one value (taken from the hypothetical value vector).
+This looks like the following:
+```{r}
+head(income_vec)
+
+temporary[, "income"] <- income_vec[1]
+
+head(temporary)
+```
+2. We then matrix multiply this new design matrix, with all actual values of our predictor of interest replaced by one hypothetical value of our predictor interest and with all the other values held at their observed values, by our simulated betas. This creates a matrix, which has as many rows as the rows of our data, and as many columns as there are samples of our betas.  
+```{r}
+dim(invlogit(temporary %*% t(sim_betas_m1)))
+```
+3. We then take the mean across the columns (`margins = 2`) because different columns represent different predicted probabilities, for each of the observations in our temporary design matrix, when we use different betas and when our predictor of interest has been replaced with one value. This means that we then have a mean predicted probability for each different set of betas when our predictor of interest is at a certain value.
+
+The call to `map_dfc` then returns a dataframe that has 1000 rows and 100 columns (1 column for each value of our hypothetical value vector). Because we are interested in how the predicted probability changes according to the hypothetical values of our predictor of interest and because we currently have 1000 predicted probabilities for each of these hypothetical values (1 for each of our simulated betas), we once again use `apply` with `margins = 2`. We get the mean of predicted values for each value of our hypothetical value vector, and then use the `quantile` with a `probs` argument equal to the bounds of our desired confidence interval (for example, if we want a 95% confidence interval, we will do `quantile(x, probs = c(0.025, 0.975))`).  
+
+```{r}
+
+
+plotdat <- t(apply(pp, 2, function(x) { # transposing w/ t() puts data into a column
+    c(M = mean(x), quantile(x, c(0.025, 0.975)))
+}))
+
+plotdat <- data.frame(plotdat, income_vec)
+```
+
+We can then use these data to plot the mean predicted probability and our confidence bands.
+```{r}
+colnames(plotdat) <- c('pe', 'lo', 'hi', 'income')
+head(plotdat)
+
+ggplot(plotdat, aes(x = income, y = pe, ymin = lo, ymax = hi)) +
+  geom_ribbon(aes(fill = '95% Confidence Interval (Simulation)'),
+              alpha = .5) +
+  geom_line(col = 'maroon') +
+  labs(x = 'Income', y = 'Predicted Probability') +
+  ylim(c(0, 1)) +
+  scale_fill_manual('', values = 'darkorange') +
+  theme_bw() +
+  theme(legend.title = element_text(), legend.position = 'bottom',
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())
+```
+
