@@ -1,0 +1,218 @@
+---
+title: "Lab 11: Poisson and Negative Binomial Models"
+author: "TA: Isabel Laterzo"
+date: "April 7, 2021"
+output: pdf_document
+---
+
+Code has been adapted from Simon Hoellerbauer. 
+
+Load necessary packages:
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, messsage = FALSE)
+rm(list=ls()) 
+library(haven)
+library(ggplot2)
+library(MASS)
+library(labelled)
+library(AER)
+library(foreign)
+setwd("/Users/IsabelLaterzo/Dropbox/Poli784_2021/Labs/Lab11_PoissonNBmodels")
+```
+
+### Poisson and Negative Binomial Models
+
+We can apply the types of exercises we've used for logits and multinomial logits to poisson models.
+
+First, get our data. These data are counts from Maoz (2006) of interstate war. 
+
+*You'll need to change the directory to bring in the file (posted on github).*
+
+```{r, message=F, warning=F, include=F}
+count <- read_dta("Maoz.dta")
+#count2 <-na.omit(count) # <- don't do this with your data unless you are absolutely
+#sure that you want to drop all nas 
+```
+
+We'll be using the variable "nowars20" as our DV - this counts the number of wars in the international system. Let's plot a histogram:
+
+```{r, message=F, warning=F}
+ggplot(data=______, aes(x=______)) +
+  geom_histogram(bins=25, fill="turquoise") +
+  labs(x="Number of MIDS") +
+  theme_bw()
+```
+
+This variable is an interesting one in that it's possibly a bit larger (higher range of counts) than many we'd encounter.
+
+Nonetheless, let's build our model. We're going to look at the number of militarized interstate wars based on 'trade network polarization' (lgtrdnpi2) and the number of democratic cliques (clqdemreg) in the system: 
+
+```{r}
+m1 <- glm(___________________)
+summary(m1)
+```
+Note that this tells us "Dispersion parameter for poisson family taken to be 1."
+
+So, our constant gives the prediction if all X variables at zero (not always substantively meaningful, since some variables are not/cannot be 0).
+
+The coefficient of each x is the expected difference in y (on the logarithmic scale) for each additional unit of the X. (Why is this? What is link function of the Poisson?) To interpret coefficients, we can exponentiate them and treat them as multiplicative effects. 
+
+Before we delve further into this model, we might want to check for overdispersion (what's this?). 
+
+One approach is to plot the mean of the data against the estimated variance. Try doing this by using the `fitted()` function below (look up what it is!), and then following the code.
+
+```{r, message=F, warning=F}
+fits <- _________ #fitted()
+
+over <- data.frame(cbind(fits, (model.frame(m1)$nowars20-fits)^2)) #Use squared residuals to approx. value of the variance
+
+ggplot(data=over, aes(x=fits, y=V2))+
+  geom_point()+
+  geom_smooth(aes(x=fits, y=V2), method=lm, se=FALSE, color="blue")+ #line for mean of estimates against the variance of estimates
+  geom_smooth(aes(x=fits, y=fits), method=lm, se=FALSE, color='red')+ #assumes mean = variance
+  theme_bw()
+  #Add legend
+```
+
+We can also check with the dispersiontest() in the AER package: 
+
+```{r, message=F, warning=F}
+dispersiontest(m1)
+```
+So, our ALTERNATIVE hypothessis is that the true dispersion is greater than 1. What is our p-value? So what is supported - null or alternative hyptohesis? Do we have overdispersion?
+
+
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+--- don't look ----
+
+
+YES! Looks like we might be dealing with some overdispersion. What can we do to correct this? Let's try a new model - a negative binomial model. While Poisson assumes that the mean and variance are the same, the Negative Binomial model better fits data shows variation which is greater than the mean. The NB model has an additional parameter compared to the Poisson, and this parameter allows us to adjust for more dispersion in the data. In fact, the Poisson model is a special case of the NB.
+
+The `glm` function does not handle NB models. We now need to use a new function - `glm.nb` - which is especially for NB models. 
+
+```{r, message=F, warning=F}
+
+m2<- ___________________
+summary(m2)
+
+coefs<-cbind(coef(m1), coef(m2))
+coefs
+
+```
+What happened to the coefficients? What happened to the standard errors?
+
+We also can look at AIC - let's compare the two models:
+
+```{r}
+#compare models using AIC
+#which is better?
+
+
+
+
+
+```
+
+Let's also compare these models using a rootogram, you might have read about this in Ward! We're going to install a package here from a repo which makes it easy to do this. Rootograms help us understand the predictive accuracy of a model based on actual data. It will show us the expected counts given the model vs. the observed counts. It does so by square rooting the counts, which allows us to more easily examine departures from our expectations even at smaller frequencies. 
+
+```{r}
+#install.packages("countreg", repos="http://R-Forge.R-project.org")
+library(countreg)
+library(cowplot)
+
+root.pois <- rootogram(m1, style = "hanging", plot = FALSE)
+root.nb <- rootogram(m2, style = "hanging", plot = FALSE)
+
+ylims <- ylim(-5, 11)  # common scale for comparison
+plot_grid(autoplot(root.pois) + ylims, autoplot(root.nb) + ylims, 
+          ncol = 2, labels = c("Poisson", "Neg. Binom"))
+
+```
+What does this tell us? The rootogram reflects fitted counts. If a bar doesn't reach the zero line, the model is overpredicting a certain count bin. If it exceeds the zero line, it underpredicts. So, neither of these models are perfect. BUT - the poisson model seems to both over and underpredict a lot. The negative binomial model on the other hand definitely over predicts, but not as much. 
+
+
+## Predicted Counts
+
+For the sake of illustration (and because we see it is a better fitting model), let's use the NB model to plot predicted counts, using simulation. 
+
+```{r, message=F, warning=F}
+set.seed(8970)
+Betas <- ___________
+vcv <- vcov(_____)
+
+#Set a number of simulations. 
+m2_sims <-1000
+
+#Create our matrix of simulated data- we'll limit our dataset to do so.
+sims_mat <- mvrnorm(____, _____, ____)
+dim(sims_mat)
+
+temp_data <- model.matrix(m2)
+
+pc_sims <- matrix(NA, nrow = m2_sims, ncol = nrow(temp_data))
+
+#Fill in our predicted probabilities with a for() loop! 
+for(i in 1:m2_sims){
+  pc_sims[i, ] <- exp(_______________) 
+}
+
+
+#What if we wanted a single point estimate of our predicted count of wars given our IVs?
+mean(pc_sims)
+
+#And the upper and lower boundaries of a confidence interval based on this simulation?
+quantile(pc_sims, prob= 0.025) 
+quantile(pc_sims, prob= 0.975) 
+```
+
+How do we predict counts over the range of a variable? Like we always have! Let's say we want to know what happens to the predicted number of counts as the average number of democratic cliques varies from its min to its max.
+```{r}
+temp_data <- count
+
+dem_cl <- seq(from = ___, 
+              to = _____,
+              length.out = 50)
+
+pc_dem_cl <- purrr::map_dfr(dem_cl, function(x){
+  
+  temp_data$clqdemreg <- x
+  
+  pc_df <- exp(model.matrix(m2, data = temp_data) %*% t(sims_mat))
+  
+  pc_val <- as.data.frame(t(colMeans(pc_df)))
+  
+}) 
+
+#we could do this in one step, but I like keeping all of the simulated counts so
+#we can do whatever we want with the distribution of predicted counts
+plot_data <- t(apply(pc_dem_cl, 1, quantile, probs = c(.1, .5, .9))) %>% as.data.frame()
+plot_data$dem_cl <- dem_cl
+```
+
+Below, try using ggplot to plot this information we just generated. Follow these guidlines:
+- X axis: Average number of Democratic Cliques
+- Y axis: Predicted count of Intl. Wars
+- Include a geom_line() for Dem_Cliques
+- Include a geom_ribbon() with CIs (80% confidence interval)
+- Include a legend which specifies what the line is and what the CIs are, try putting that legend on the bottom
+
+```{r}
+#Now to plot: 
+colnames(plot_data)<-c("low", "med", "high", "Dem_Cliques")
+
+#Collapse information into 3 vectors: for each value of trade in our data, 
+#give us the average point estimate (expected count), the low bound of a confidence interval, and the high bound.
+
+```
