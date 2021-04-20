@@ -1,0 +1,339 @@
+---
+title: "Lab 13: Multilevel Generalized Linear Models"
+author: "Isabel Laterzo, with text and code adopted/adapted from Simon Hoellerbauer and Rob Williams"
+date: "April 21, 2019"
+output:
+  html_document:
+    code_folding: hide
+    highlight: tango
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{subcaption}
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, fig.align = 'center', message = F, cache = T) # code chunks included by default
+options(digits = 2) # round all R output to two digits
+library(xtable)
+library(knitr)
+#setwd("/Users/IsabelLaterzo/Dropbox/Poli784_2021/Labs/Lab13_glmer")
+```
+
+
+
+## Mixed Effects Logistic Regression
+
+
+As we learned earlier in the semester, generalized linear models use a link function $g(\cdot)$ that transforms the continuous, unbounded response variable $y$ of linear regression onto some discrete, bounded space. This allows us to model outcomes that are not continuous and do not have normally distributed errors. To obtain the relationship between the predictors and the untransformed response variable, we simply apply the inverse link function $g^{-1}(\cdot)$ to the right hand side of the model.
+
+$$
+y = g^{-1}(\mathbf{X}\boldsymbol{\beta})
+$$
+
+The linear combination of the explanatory variables is known as the *linear predictor*, usually termed $\eta$. Since software handles all the nuts and bolts of estimation via maximum likelihood, we can just throw some random effects terms into $\eta$ without having to worry. The only change we have to make in R is to use `glmer()` instead of `lmer()`. Let's try this out with some survey data.
+
+```{r, message = F, warning = F}
+library(plyr) # load plyr first to avoid dplyr conflicts later
+library(MASS) # multivariate random normal distribution (load before tidyverse so that select isn't masked)
+library(tidyverse)
+library(haven)
+library(labelled)
+library(countrycode)
+
+## read in data
+ab <- read_sav('http://afrobarometer.org/sites/default/files/data/round-6/merged_r6_data_2016_36countries2.sav')
+au <- read.csv('au.csv')
+#scaling area to make it more tractable for lmer
+au$AREA_scaled <- scale(au$AREA)
+
+## drop missing observations, subset variables, and attach region
+ab <- ab %>% filter(Q90A %in% 0:1, # close to party
+                    EA_FAC_A %in% 0:1, # post office
+                    EA_FAC_B %in% 0:1, # school
+                    EA_FAC_C %in% 0:1, # police station
+                    EA_FAC_D %in% 0:1, # clinic
+                    Q4A %in% 0:5, # present economic condition
+                    Q11A %in% 0:3, # property crime
+                    Q11B %in% 0:3, # violent crime
+                    Q52A %in% 0:3, # trust president
+                    Q97 %in% 0:9) %>% # education level
+  mutate(COUNTRY = to_factor(COUNTRY)) %>% 
+  dplyr::select(COUNTRY, Q90A, EA_FAC_A:EA_FAC_D, Q4A, Q11A, Q11B, Q52A, Q97) %>%
+  left_join(au) %>%
+  filter(!is.na(REGION))
+
+## create custom coefficient map for texreg tables
+tab_map <- list('EA_FAC_A' = 'Post Office', 'EA_FAC_B' = 'School',
+                'EA_FAC_C' = 'Police Station', 'EA_FAC_D' = 'Clinic',
+                'Q4A' = 'Economic Condition', 'Q11A' = 'Property Crime',
+                'Q11B' = 'Violent Crime', 'Q52A' = 'Trust President',
+                'Q97' = 'Education', '0|1' = '0|1', '1|2' = '1|2', '2|3' = '2|3')
+```
+
+Now that we've got our data, let's fit a model. Write a model where whether a respondent feels close to a party is a function of their access to post offices, schools, police stations, and clinics, and their education level. Include a random intercept by country. In scalar form, this model looks like this:
+
+\begin{align}
+\text{party}_i &= \text{logit}^{-1}(\beta_0 + \beta_1post~office + \beta_2school + \beta_3police + \beta_4clinic + \beta_5education + \alpha_{country} + \epsilon) \\
+\alpha &\sim \mathcal{N}(0, \sigma^2)
+\end{align}
+
+
+
+```{r, results = 'asis', eval = FALSE}
+library(lme4)
+library(texreg)
+
+## fit model with random intercepts
+mod <- glmer(_________, data = _____, family = _______))
+
+## present results
+## note thsi is for an HTML
+htmlreg(mod, stars = .05, custom.coef.map = tab_map)
+```
+
+Interpretation of the fixed effects (in the `lmer()` sense!) is straightforward and equivalent to a regular logit. To understand the random effects, we need to do a little more work. The table tells us that the variance of the random intercept by country is `r as.numeric(attr(lme4::VarCorr(mod)$COUNTRY, 'stddev')^2)`. Since we have assumed mean 0 for the distribution of the random effects, a variance of `r as.numeric(attr(lme4::VarCorr(mod)$COUNTRY, 'stddev')^2)` means that there isn't large variation in the baseline probability of feeling close to a political party in the countries in our data.
+
+
+## Quantities of Interest
+
+### Quantities Over Range of A Variable (What We Discussed in Lecture)
+
+Since coefficients are no longer the marginal effect of $x$ on $y$ in GLMs, we often present quantities of interest to facilitate model intepretation. Unlike regular GLMs, we can no longer follow our standard approach and simply calculate $\text{logit}^{-1}(\mathbf{X}\boldsymbol{\beta})$ for a number of $\boldsymbol{\beta}$ vectors sampled from a multivariate normal distributions. Doing this only accounts for uncertainty in the **fixed effects** and ignores uncertainty in the **random effects** because it treats them as known and ignores the fact that they are estimates drawn from a distribution. If we do this, we're in effect ignoring a large amount of the uncertainty in our model, and so the confidence intervals of our predictions will be smaller than they should be.
+
+Luckily the `simulate.merMod()` function takes care of this for us. It is similar to the base `predict()`, except it allows you to draw new random effects from their distribution. This means we can use it to generate predicted probabilities be averaging across the predictions for all of our simulated coefficients. Below, we calculate the predicted probability of feeling close to a party as a function of education level. Because it becomes difficult to digest the results if we plot this for all countries (plus it will be very computationally expensive), we will choose three countries. Below, we plot the results for Malawi, Tanzania, and Zambia.
+
+```{r, warning=FALSE}
+library(doParallel) # parallel plyr
+registerDoParallel(parallel::detectCores()) # use all cores
+
+## subset to countries of interest
+pred_dat <- ab %>% subset(_____ %in% c(_________))
+
+## repeat data for each value in Q97
+pred_dat_full <- pred_dat[rep(_________, ___________, ]
+
+## replace Q97 with simulated range of values
+pred_dat_full$Q97 <- with(ab, rep(seq(___, _____,
+                                      length.out = _______),
+                                  each = nrow(pred_dat)))
+
+## sample 500 draws from distribution of fixed effects
+coef_samp <- ___________
+
+## predict outcomes for all 500 sampled fixed effects
+#note this takes a minute or two!
+preds <- alply(coef_samp, 1, function(x) {
+  simulate(mod, nsim = 1, # 1 simulation
+           re.form = ~ 0, # sample all REs
+           newdata = pred_dat_full, # generate predictions from simulated data
+           newparams = list(beta = x)) # use sampled fixed effects
+  }, .parallel = T, .paropts = list(.export = c('mod', 'pred_dat_full')))
+
+## create empty column to hold simulated predictions
+pred_dat_full$pred <- NA
+```
+
+
+
+Now, we are going to use some new functions here form `plyr` - look into how `ldply()` and `ddply()` work, then try out the following:
+```{r}
+## calculate predicted probabilities from simulated predictions
+preds_agg_all <- ldply(preds, function(x, dat) {
+  dat$pred <- x[[1]] # set prediction to simulated outcome
+  ddply(dat, c('COUNTRY', 'Q97'), # split data by country and Q97
+        function(m) mean(m$pred)) # calculate proportion of 1s
+  }, dat = pred_dat_full, .parallel = T,
+  .paropts = list(.export = c('mod', 'pred_dat_full')))
+
+## calculate median and quantiles for plotting
+preds_agg <- ddply(preds_agg_all, c("COUNTRY", "Q97"),
+                   function (y) quantile(y$V1, c(0.05, 0.5, 0.95)))
+
+## rename columns for ggplot access
+names(preds_agg)[3:5] <- c("LB", "PE", "UB")
+
+## plot predicted probabilities using ggplot()
+# put Q97 on the  x axis, your point ests on the y, and include upper and lower bounds
+
+```
+
+
+We can see that there isn't a statistically significant difference between any of the countries, but that shouldn't be surprising given that the variance of our country random intercept is `r as.numeric(attr(lme4::VarCorr(mod)$COUNTRY, 'stddev')^2)`.
+
+
+### Quantities of Interest Over Range of Linear Predictor
+
+Gelman & Hill discuss an alternative to showing predicted effects. If we are not really interested in the individual level effects but instead want to know what the difference in predicted effects is for our groups, we can plot the predicted outcome over the range of the *data-level* linear predictor (which should be the same for the whole data set given that none of the slopes of our variables vary by group) *plus* the country intercept, to show the difference between countries.
+
+In our context, this means we will take the following approach:
+$$
+\text{Pr}(y_i = \text{Close to Party}) = \text{logit}^{-1}(\text{linpred}_i + \alpha^{\text{country}}_{j[i]})
+$$
+
+To make this more interesting, let's first make our country-level intercepts a function of a country-level variable: area (in square kilometers, `AREA_scaled`). 
+
+```{r}
+mod2 <- glmer(_________)
+summary(mod2)
+```
+
+Then we can use `bootMer` to help us account for the uncertainty of our random intercepts, by calculating standard errors around our estimates:
+```{r}
+## filter for malaqi, tanzania, and zambia
+countries_in_pred <- c(___________)
+area <- au %>% filter(_________)
+```
+
+A trick, to avoid having to run this during compiling, which can take up to half an hour - save the bootMer() as an object and an RDS - then reload when you need it!
+
+Look up `bootMer` and run it on our mod2 with the function specified. Include 20 sims, set a seed, 8 ncpus, and call multicore parallel.
+```{r, eval=FALSE}
+## Obtain approximate standard error 
+## of random intercepts via parametric 
+## bootstrap (this can take a few minutes)
+ranef_sd_se <- bootMer(mod2, function(x)as.data.frame(VarCorr(x))$sdcor
+                       , nsim = 20, seed = 123
+                       , ncpus = 8
+                       , parallel = "multicore")$t 
+
+save(ranef_sd_se, file =  "ranef_sd_se.RData")
+```
+
+Now we load the object we just created and then continue on our merry way.
+```{r}
+library(lme4)
+load("ranef_sd_se.RData")
+## Form state-level RE mean predictions
+pred_Z <- as.matrix(model.matrix(_________) #Remove intercept
+
+ranef_ab <- cbind(lme4::ranef(mod2)$COUNTRY, COUNTRY = rownames(lme4::ranef(mod2)$COUNTRY))
+
+sub_ranef_ab <- merge(___, ____, all.x = TRUE) #merge randdom affect and the au data
+
+sub_ranef_ab[is.na(sub_ranef_ab)] <- 0 #Replace unobserved states' intercept with mean (i.e. 0) 
+
+pred_country <- sub_ranef_ab["(Intercept)"]  +
+  pred_Z %*% fixef(mod2)[c("AREA_scaled")] #this is now full estimated random intercept
+
+## Form simulated random intercepts by taking draws from normal centered around 
+## estimated random intercept, using simulated SDs
+re_sim <- laply(ranef_sd_se,
+                function(x, mean_vec){
+                  rnorm(length(mean_vec), mean_vec, x)
+                },
+                mean_vec = pred_country[[1]])
+
+## Get range of data-level linear predictor
+## (i.e. excluding state-level predictors)
+linpred_range <- range(predict(mod2, 
+                               newdata = transform(model.frame(mod2)
+                                                   , AREA_scaled = 0),
+                               re.form=NA
+))
+
+##Create plots
+par(mfrow=c(1,3))
+for(country in c(countries_in_pred)){
+  country_ind <- which(sub_ranef_ab$COUNTRY == country)
+  plot (0, 0, xlim = linpred_range, ylim=c(0,1),
+        yaxs="i", xlab="linear predictor", ylab="Pr(Close to Party)",
+        main = sub_ranef_ab$COUNTRY[country_ind], type="n")
+  for (sample in 1:20){
+    curve(pnorm(re_sim[sample, country_ind] + x), lwd = .5, add = TRUE, col = "gray")
+  }
+  curve(pnorm(median(re_sim[, country_ind]) + x), lwd = 2, add = TRUE)
+}
+```
+
+
+## Nested Random Effects
+
+
+One of the advantages of `lme4` is that it allows us to estimate *nested random effects* models when we have data with multiple levels of dependence. We can extend the model above to allow the mean to the country random intercept to vary as a function of region.
+
+
+
+\begin{align}
+\text{party}_i &= \text{logit}^{-1}(\mathbf{x}_i\boldsymbol{\beta} + \alpha_{j[i]}) \\
+\alpha &\sim \mathcal{N}(\mu, \sigma^2) \\
+\mu_i &= \gamma\text{Region}_i \\
+\end{align}
+
+
+
+The way to do this in `glmer()` is `(1 | group1 / group2)` where `group2` is a smaller group nested in `group1` e.g. countries in regions, cities in states, armed groups in countries, etc. Estimate a model in `glmer()` that matches this new statistical mode.
+
+
+
+```{r, results = 'asis'}
+## fit model w/ nested random intercepts
+mod3 <- glmer(__________, data = ___, family = _____)
+
+## present results
+htmlreg(mod3, stars = .05, custom.coef.map = tab_map)
+```
+
+
+
+While this nested approach allows us to account for more complex dependence structures, it also complicates the interpretation of our results. Now to get the intercept for a given country, we have to combine the fixed effect intercept, the country:region intercept, and the region intercept. Do this for South Africa, but remember that a `merMod` object is not an `lm` object, so we have to use the `beta` slot or `fixef()` to access the fixed effects.
+
+
+
+```{r}
+fixef(mod3)['(Intercept)'] + lme4::ranef(mod)[[1]][grepl('South Africa', rownames(lme4::ranef(mod3)[[1]])), ] +
+  lme4::ranef(mod3)[[2]][grepl('Southern', rownames(lme4::ranef(mod3)[[2]])), ]
+```
+
+
+
+## Ordered Logits
+
+
+
+While there are lots of different GLMs out in the world, `glmer()` can only really fit binomial and Poisson models. If you want to fit a multinomial probit, you'll have to turn to another package. For today, we're just going to look at ordered logistic regression via the `clmm()` function in the `ordinal` package. Cumulative link mixed models are another way of referring to random effects ordered logit (or probit) models. Just like `lme4`, `ordinal` supports nested random effects. Try fitting a model that explains a respondent's level of trust in the president as a function of their economic condition, whether they've been a victim of property or violent crime, and their education level.
+
+
+
+```{r, error = T}
+library(ordinal)
+
+## fit model
+## nest region in country
+## DV: Q52A
+## IVS: Q4A, Q11A, Q11B, Q97
+
+mod <- clmm(______, data = ___)
+#doesn't work!
+```
+
+
+
+Unfortunately, `clmm()` isn't quite as smart as `glmer()`. To make it happy, we need to make sure that our outcome variable, and any grouping variables, are factors. We don't have to do this for `lmer()` because the function automatically checks that these variables are integers and converts them to factors if they are. Once we've taken care of that, we can fit the model.
+
+
+So, let's try again! Mutate those variables to factors, then re run the model.
+```{r, results = 'asis'}
+## convert outcome and country to factor
+ab <- ab %>% mutate()
+
+## fit model
+mod4 <- clmm(________, data = __)
+
+## present results
+htmlreg(mod4, stars = .05, custom.coef.map = tab_map, groups = list('Predictors' = 1:4, 'Cutpoints' = 5:7))
+```
+
+
+
+The cutpoints divide the outcome variable as a function of the linear predictor, so if $\eta_i = 1.22$ after the inclusion of the appropriate random intercept terms, then $\hat{y_i} = 2$ because $0.48 < 1.22 \leq 1.53$. 
+
+
+
+## Individual Exercise
+
+
+
+Use the Global Terrorism Database contained in `GTD.csv` to estimate a model where the number of terrorist attacks in a country-year is explained by GDP per capita and VDEM's polyarchy score (v2x_polyarchy). `WDI` and the `vdem` packages (https://github.com/xmarquez/vdem) are your friends. Include a random intercept term by country, and allow the mean of country random intercepts to vary by year. Produce a publication quality table of your results. Is there more variation between countries or between years?
+
+
