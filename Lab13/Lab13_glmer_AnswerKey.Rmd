@@ -99,9 +99,9 @@ Interpretation of the fixed effects (in the `lmer()` sense!) is straightforward 
 
 ## Quantities of Interest
 
-### Quantities Over Range of A Variable (What We Discussed in Lecture)
+### Quantities Over Range of A Variable
 
-Since coefficients are no longer the marginal effect of $x$ on $y$ in GLMs, we often present quantities of interest to facilitate model intepretation. Unlike regular GLMs, we can no longer follow our standard approach and simply calculate $\text{logit}^{-1}(\mathbf{X}\boldsymbol{\beta})$ for a number of $\boldsymbol{\beta}$ vectors sampled from a multivariate normal distributions. Doing this only accounts for uncertainty in the **fixed effects** and ignores uncertainty in the **random effects** because it treats them as known and ignores the fact that they are estimates drawn from a distribution. If we do this, we're in effect ignoring a large amount of the uncertainty in our model, and so the confidence intervals of our predictions will be smaller than they should be.
+Since coefficients are no longer the marginal effect of $x$ on $y$ in GLMs, we often present quantities of interest to facilitate model interpretation. Unlike regular GLMs, we can no longer follow our standard approach and simply calculate $\text{logit}^{-1}(\mathbf{X}\boldsymbol{\beta})$ for a number of $\boldsymbol{\beta}$ vectors sampled from a multivariate normal distributions. Doing this only accounts for uncertainty in the **fixed effects** and ignores uncertainty in the **random effects** because it treats them as known and ignores the fact that they are estimates drawn from a distribution. If we do this, we're in effect ignoring a large amount of the uncertainty in our model, and so the confidence intervals of our predictions will be smaller than they should be.
 
 Luckily the `simulate.merMod()` function takes care of this for us. It is similar to the base `predict()`, except it allows you to draw new random effects from their distribution. This means we can use it to generate predicted probabilities be averaging across the predictions for all of our simulated coefficients. Below, we calculate the predicted probability of feeling close to a party as a function of education level. Because it becomes difficult to digest the results if we plot this for all countries (plus it will be very computationally expensive), we will choose three countries. Below, we plot the results for Malawi, Tanzania, and Zambia.
 
@@ -182,7 +182,6 @@ summary(mod2)
 
 Then we can use `bootMer` to help us account for the uncertainty of our random intercepts, by calculating standard errors around our estimates:
 ```{r}
-## Select 8 states those for which previous vote history is available
 countries_in_pred <- c("Malawi", "Tanzania", "Zambia")
 area <- au %>% filter(COUNTRY %in% countries_in_pred)
 ```
@@ -194,10 +193,10 @@ A trick, to avoid having to run this during compiling, which can take up to half
 ## bootstrap (this can take a few minutes)
 ranef_sd_se <- bootMer(mod2, function(x)as.data.frame(VarCorr(x))$sdcor
                        , nsim = 20, seed = 123
-                       , ncpus = 8
-                       , parallel = "multicore")$t 
+                      , ncpus = 8
+                      , parallel = "multicore")$t 
 
-save(ranef_sd_se, file =  "ranef_sd_se.RData")
+#save(ranef_sd_se, file =  "ranef_sd_se.RData")
 ```
 
 Now we load the object we just created and then continue on our merry way.
@@ -324,6 +323,34 @@ htmlreg(mod4, stars = .05, custom.coef.map = tab_map, groups = list('Predictors'
 
 The cutpoints divide the outcome variable as a function of the linear predictor, so if $\eta_i = 1.22$ after the inclusion of the appropriate random intercept terms, then $\hat{y_i} = 2$ because $0.48 < 1.22 \leq 1.53$. 
 
+## Brief discussion of `lmer()` / `glmer()` syntax with regard to random slopes and intercepts
+
+Here, I'm going to fit three different models, incorporating different ideas of random slopes - assuming that education here leads to some sort of varying effect that we need to capture. I want you to take a look at the summaries and particularly examine the section that Random Effects section - what is different among these models?
+```{r}
+
+modslope_1 <- glmer(Q90A ~ EA_FAC_A + EA_FAC_B + EA_FAC_C + EA_FAC_D + 
+                + (Q97 | COUNTRY), 
+              data = ab, family = binomial(link = 'logit'))
+
+summary(modslope_1)
+
+modslope_2 <- glmer(Q90A ~ EA_FAC_A + EA_FAC_B + EA_FAC_C + EA_FAC_D + 
+                + (Q97 + 1 | COUNTRY), 
+              data = ab, family = binomial(link = 'logit'))
+
+summary(modslope_2)
+
+
+#what is different about this model here?
+modslope_3 <- glmer(Q90A ~ EA_FAC_A + EA_FAC_B + EA_FAC_C + EA_FAC_D + 
+                + (Q97 - 1 | COUNTRY), 
+              data = ab, family = binomial(link = 'logit'))
+
+summary(modslope_3)
+
+```
+
+For other syntax questions about `glmer()` and `lmer()`, I would also check out [this resource:](https://cran.r-project.org/web/packages/lme4/vignettes/lmer.pdf).
 
 
 ## Individual Exercise
