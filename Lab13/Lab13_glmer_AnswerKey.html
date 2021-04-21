@@ -504,9 +504,9 @@ Var: COUNTRY (Intercept)
 </div>
 <div id="quantities-of-interest" class="section level2">
 <h2>Quantities of Interest</h2>
-<div id="quantities-over-range-of-a-variable-what-we-discussed-in-lecture" class="section level3">
-<h3>Quantities Over Range of A Variable (What We Discussed in Lecture)</h3>
-<p>Since coefficients are no longer the marginal effect of <span class="math inline">\(x\)</span> on <span class="math inline">\(y\)</span> in GLMs, we often present quantities of interest to facilitate model intepretation. Unlike regular GLMs, we can no longer follow our standard approach and simply calculate <span class="math inline">\(\text{logit}^{-1}(\mathbf{X}\boldsymbol{\beta})\)</span> for a number of <span class="math inline">\(\boldsymbol{\beta}\)</span> vectors sampled from a multivariate normal distributions. Doing this only accounts for uncertainty in the <strong>fixed effects</strong> and ignores uncertainty in the <strong>random effects</strong> because it treats them as known and ignores the fact that they are estimates drawn from a distribution. If we do this, we’re in effect ignoring a large amount of the uncertainty in our model, and so the confidence intervals of our predictions will be smaller than they should be.</p>
+<div id="quantities-over-range-of-a-variable" class="section level3">
+<h3>Quantities Over Range of A Variable</h3>
+<p>Since coefficients are no longer the marginal effect of <span class="math inline">\(x\)</span> on <span class="math inline">\(y\)</span> in GLMs, we often present quantities of interest to facilitate model interpretation. Unlike regular GLMs, we can no longer follow our standard approach and simply calculate <span class="math inline">\(\text{logit}^{-1}(\mathbf{X}\boldsymbol{\beta})\)</span> for a number of <span class="math inline">\(\boldsymbol{\beta}\)</span> vectors sampled from a multivariate normal distributions. Doing this only accounts for uncertainty in the <strong>fixed effects</strong> and ignores uncertainty in the <strong>random effects</strong> because it treats them as known and ignores the fact that they are estimates drawn from a distribution. If we do this, we’re in effect ignoring a large amount of the uncertainty in our model, and so the confidence intervals of our predictions will be smaller than they should be.</p>
 <p>Luckily the <code>simulate.merMod()</code> function takes care of this for us. It is similar to the base <code>predict()</code>, except it allows you to draw new random effects from their distribution. This means we can use it to generate predicted probabilities be averaging across the predictions for all of our simulated coefficients. Below, we calculate the predicted probability of feeling close to a party as a function of education level. Because it becomes difficult to digest the results if we plot this for all countries (plus it will be very computationally expensive), we will choose three countries. Below, we plot the results for Malawi, Tanzania, and Zambia.</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(doParallel) <span class="co"># parallel plyr</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">registerDoParallel</span>(parallel<span class="sc">::</span><span class="fu">detectCores</span>()) <span class="co"># use all cores</span></span>
@@ -614,19 +614,18 @@ Var: COUNTRY (Intercept)
 ## Q97         -0.119 -0.066   -0.008   -0.058   -0.039         
 ## AREA_scaled  0.061 -0.001    0.000    0.000   -0.007   -0.010</code></pre>
 <p>Then we can use <code>bootMer</code> to help us account for the uncertainty of our random intercepts, by calculating standard errors around our estimates:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="do">## Select 8 states those for which previous vote history is available</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>countries_in_pred <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;Malawi&quot;</span>, <span class="st">&quot;Tanzania&quot;</span>, <span class="st">&quot;Zambia&quot;</span>)</span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>area <span class="ot">&lt;-</span> au <span class="sc">%&gt;%</span> <span class="fu">filter</span>(COUNTRY <span class="sc">%in%</span> countries_in_pred)</span></code></pre></div>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>countries_in_pred <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;Malawi&quot;</span>, <span class="st">&quot;Tanzania&quot;</span>, <span class="st">&quot;Zambia&quot;</span>)</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>area <span class="ot">&lt;-</span> au <span class="sc">%&gt;%</span> <span class="fu">filter</span>(COUNTRY <span class="sc">%in%</span> countries_in_pred)</span></code></pre></div>
 <p>A trick, to avoid having to run this during compiling, which can take up to half an hour - save the bootMer() as an object and an RDS - then reload when you need it!</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="do">## Obtain approximate standard error </span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="do">## of random intercepts via parametric </span></span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="do">## bootstrap (this can take a few minutes)</span></span>
 <span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>ranef_sd_se <span class="ot">&lt;-</span> <span class="fu">bootMer</span>(mod2, <span class="cf">function</span>(x)<span class="fu">as.data.frame</span>(<span class="fu">VarCorr</span>(x))<span class="sc">$</span>sdcor</span>
 <span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>                       , <span class="at">nsim =</span> <span class="dv">20</span>, <span class="at">seed =</span> <span class="dv">123</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>                       , <span class="at">ncpus =</span> <span class="dv">8</span></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>                       , <span class="at">parallel =</span> <span class="st">&quot;multicore&quot;</span>)<span class="sc">$</span>t </span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>                      , <span class="at">ncpus =</span> <span class="dv">8</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>                      , <span class="at">parallel =</span> <span class="st">&quot;multicore&quot;</span>)<span class="sc">$</span>t </span>
 <span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="fu">save</span>(ranef_sd_se, <span class="at">file =</span>  <span class="st">&quot;ranef_sd_se.RData&quot;</span>)</span></code></pre></div>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="co">#save(ranef_sd_se, file =  &quot;ranef_sd_se.RData&quot;)</span></span></code></pre></div>
 <p>Now we load the object we just created and then continue on our merry way.</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(lme4)</span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="fu">load</span>(<span class="st">&quot;ranef_sd_se.RData&quot;</span>)</span>
@@ -1112,6 +1111,133 @@ Variance: REGION: (Intercept)
 </tfoot>
 </table>
 <p>The cutpoints divide the outcome variable as a function of the linear predictor, so if <span class="math inline">\(\eta_i = 1.22\)</span> after the inclusion of the appropriate random intercept terms, then <span class="math inline">\(\hat{y_i} = 2\)</span> because <span class="math inline">\(0.48 &lt; 1.22 \leq 1.53\)</span>.</p>
+</div>
+<div id="brief-discussion-of-lmer-glmer-syntax-with-regard-to-random-slopes-and-intercepts" class="section level2">
+<h2>Brief discussion of <code>lmer()</code> / <code>glmer()</code> syntax with regard to random slopes and intercepts</h2>
+<p>Here, I’m going to fit three different models, incorporating different ideas of random slopes - assuming that education here leads to some sort of varying effect that we need to capture. I want you to take a look at the summaries and particularly examine the section that Random Effects section - what is different among these models?</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>modslope_1 <span class="ot">&lt;-</span> <span class="fu">glmer</span>(Q90A <span class="sc">~</span> EA_FAC_A <span class="sc">+</span> EA_FAC_B <span class="sc">+</span> EA_FAC_C <span class="sc">+</span> EA_FAC_D <span class="sc">+</span> </span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>                <span class="sc">+</span> (Q97 <span class="sc">|</span> COUNTRY), </span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>              <span class="at">data =</span> ab, <span class="at">family =</span> <span class="fu">binomial</span>(<span class="at">link =</span> <span class="st">&#39;logit&#39;</span>))</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(modslope_1)</span></code></pre></div>
+<pre><code>## Generalized linear mixed model fit by maximum likelihood (Laplace
+##   Approximation) [glmerMod]
+##  Family: binomial  ( logit )
+## Formula: Q90A ~ EA_FAC_A + EA_FAC_B + EA_FAC_C + EA_FAC_D + +(Q97 | COUNTRY)
+##    Data: ab
+## 
+##      AIC      BIC   logLik deviance df.resid 
+##    54954    55024   -27469    54938    45573 
+## 
+## Scaled residuals: 
+##    Min     1Q Median     3Q    Max 
+## -2.461 -0.871  0.518  0.678  2.085 
+## 
+## Random effects:
+##  Groups  Name        Variance Std.Dev. Corr 
+##  COUNTRY (Intercept) 0.89020  0.944         
+##          Q97         0.00828  0.091    -0.74
+## Number of obs: 45581, groups:  COUNTRY, 34
+## 
+## Fixed effects:
+##             Estimate Std. Error z value Pr(&gt;|z|)    
+## (Intercept)   0.3077     0.1186    2.59   0.0095 ** 
+## EA_FAC_A     -0.1308     0.0327   -4.00  6.4e-05 ***
+## EA_FAC_B      0.1146     0.0362    3.16   0.0016 ** 
+## EA_FAC_C     -0.0281     0.0294   -0.96   0.3386    
+## EA_FAC_D      0.0164     0.0269    0.61   0.5418    
+## ---
+## Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1
+## 
+## Correlation of Fixed Effects:
+##          (Intr) EA_FAC_A EA_FAC_B EA_FAC_C
+## EA_FAC_A -0.016                           
+## EA_FAC_B -0.226 -0.023                    
+## EA_FAC_C -0.009 -0.485   -0.061           
+## EA_FAC_D -0.043 -0.133   -0.260   -0.305</code></pre>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>modslope_2 <span class="ot">&lt;-</span> <span class="fu">glmer</span>(Q90A <span class="sc">~</span> EA_FAC_A <span class="sc">+</span> EA_FAC_B <span class="sc">+</span> EA_FAC_C <span class="sc">+</span> EA_FAC_D <span class="sc">+</span> </span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>                <span class="sc">+</span> (Q97 <span class="sc">+</span> <span class="dv">1</span> <span class="sc">|</span> COUNTRY), </span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>              <span class="at">data =</span> ab, <span class="at">family =</span> <span class="fu">binomial</span>(<span class="at">link =</span> <span class="st">&#39;logit&#39;</span>))</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(modslope_2)</span></code></pre></div>
+<pre><code>## Generalized linear mixed model fit by maximum likelihood (Laplace
+##   Approximation) [glmerMod]
+##  Family: binomial  ( logit )
+## Formula: Q90A ~ EA_FAC_A + EA_FAC_B + EA_FAC_C + EA_FAC_D + +(Q97 + 1 |  
+##     COUNTRY)
+##    Data: ab
+## 
+##      AIC      BIC   logLik deviance df.resid 
+##    54954    55024   -27469    54938    45573 
+## 
+## Scaled residuals: 
+##    Min     1Q Median     3Q    Max 
+## -2.461 -0.871  0.518  0.678  2.085 
+## 
+## Random effects:
+##  Groups  Name        Variance Std.Dev. Corr 
+##  COUNTRY (Intercept) 0.89020  0.944         
+##          Q97         0.00828  0.091    -0.74
+## Number of obs: 45581, groups:  COUNTRY, 34
+## 
+## Fixed effects:
+##             Estimate Std. Error z value Pr(&gt;|z|)    
+## (Intercept)   0.3077     0.1186    2.59   0.0095 ** 
+## EA_FAC_A     -0.1308     0.0327   -4.00  6.4e-05 ***
+## EA_FAC_B      0.1146     0.0362    3.16   0.0016 ** 
+## EA_FAC_C     -0.0281     0.0294   -0.96   0.3386    
+## EA_FAC_D      0.0164     0.0269    0.61   0.5418    
+## ---
+## Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1
+## 
+## Correlation of Fixed Effects:
+##          (Intr) EA_FAC_A EA_FAC_B EA_FAC_C
+## EA_FAC_A -0.016                           
+## EA_FAC_B -0.226 -0.023                    
+## EA_FAC_C -0.009 -0.485   -0.061           
+## EA_FAC_D -0.043 -0.133   -0.260   -0.305</code></pre>
+<div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">#what is different about this model here?</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>modslope_3 <span class="ot">&lt;-</span> <span class="fu">glmer</span>(Q90A <span class="sc">~</span> EA_FAC_A <span class="sc">+</span> EA_FAC_B <span class="sc">+</span> EA_FAC_C <span class="sc">+</span> EA_FAC_D <span class="sc">+</span> </span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>                <span class="sc">+</span> (Q97 <span class="sc">-</span> <span class="dv">1</span> <span class="sc">|</span> COUNTRY), </span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>              <span class="at">data =</span> ab, <span class="at">family =</span> <span class="fu">binomial</span>(<span class="at">link =</span> <span class="st">&#39;logit&#39;</span>))</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(modslope_3)</span></code></pre></div>
+<pre><code>## Generalized linear mixed model fit by maximum likelihood (Laplace
+##   Approximation) [glmerMod]
+##  Family: binomial  ( logit )
+## Formula: Q90A ~ EA_FAC_A + EA_FAC_B + EA_FAC_C + EA_FAC_D + +(Q97 - 1 |  
+##     COUNTRY)
+##    Data: ab
+## 
+##      AIC      BIC   logLik deviance df.resid 
+##    56987    57039   -28488    56975    45575 
+## 
+## Scaled residuals: 
+##    Min     1Q Median     3Q    Max 
+## -2.989 -1.067  0.606  0.739  3.493 
+## 
+## Random effects:
+##  Groups  Name Variance Std.Dev.
+##  COUNTRY Q97  0.0204   0.143   
+## Number of obs: 45581, groups:  COUNTRY, 34
+## 
+## Fixed effects:
+##              Estimate Std. Error z value Pr(&gt;|z|)    
+## (Intercept)  0.549953   0.033688   16.32  &lt; 2e-16 ***
+## EA_FAC_A    -0.247399   0.031416   -7.87  3.4e-15 ***
+## EA_FAC_B     0.038338   0.034731    1.10     0.27    
+## EA_FAC_C    -0.000246   0.028554   -0.01     0.99    
+## EA_FAC_D    -0.013914   0.025912   -0.54     0.59    
+## ---
+## Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1
+## 
+## Correlation of Fixed Effects:
+##          (Intr) EA_FAC_A EA_FAC_B EA_FAC_C
+## EA_FAC_A  0.034                           
+## EA_FAC_B -0.762 -0.019                    
+## EA_FAC_C  0.033 -0.493   -0.058           
+## EA_FAC_D -0.076 -0.134   -0.275   -0.306</code></pre>
+<p>For other syntax questions about <code>glmer()</code> and <code>lmer()</code>, I would also check out <a href="https://cran.r-project.org/web/packages/lme4/vignettes/lmer.pdf">this resource:</a>.</p>
 </div>
 <div id="individual-exercise" class="section level2">
 <h2>Individual Exercise</h2>
