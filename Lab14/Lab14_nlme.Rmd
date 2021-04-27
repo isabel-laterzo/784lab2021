@@ -1,0 +1,267 @@
+---
+title: "Multilevel Models for Time Series Cross-sectional Data"
+author: "Isabel Laterzo, with code adapted/adopted from Rob Williams"
+date: "April 27, 2021"
+output: pdf_document
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{subcaption}
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, fig.align = 'center', message = F, cache = T) # code chunks included by default
+options(digits = 2) # round all R output to two digits
+rm(list=ls())
+library(xtable)
+library(knitr)
+library(ggplot2)
+library(dplyr)
+setwd("")
+```
+
+
+
+## `nlme` for TSCS Data
+
+Today we're learning how to deal with time series cross sectional data! First, we'll be using `nlme` which stands for Linear and Nonlinear Mixed Effects Models (well, it sort of stands for that). Today, we're going to be analyzing data on voting rates (% of adult population voting) in US presidential elections from 1978 to 2014. Load the data files and combine them in preparation for the analysis.
+
+
+```{r, warning = F, message = F}
+library(tidyverse)
+library(reshape2)
+
+## load population data
+pop <- read.csv('pop.csv') %>%
+  dplyr::rename(year = V1, state = V2, population = pop) %>%
+  mutate(population = scale(population))
+
+## load voting rate data
+vote <- read.csv('vote.csv') %>% melt() %>%
+  mutate(variable = gsub('X', '', variable), variable = as.numeric(variable)) %>%
+  dplyr::rename(year = variable, vote = value)
+
+## load region data
+regions <- read.csv('regions.csv') %>%
+  dplyr::select(state = State, State.Code, region = Region)
+
+## merge data
+dat <- vote %>% left_join(regions) %>% dplyr::select(-state) %>%
+  dplyr::rename(state = State.Code) %>% left_join(pop)
+```
+
+
+`nlme` uses a slightly different syntax for mixed effects models than `lme4` does. We specify the fixed part of the model using a regular formula like we would for `lm()`, but the random component has to be specified as an argument to the `random` option e.g. `random = ~ 1| group` would produce a random intercept by `group` just like `(1 | group)` would in `lme4`.
+
+Below, estimate a model using `lme` with the following variables:
+- `vote` as the outcome
+- `population` IV
+- `region` IV
+- random intercept by `year`
+
+```{r, error = T}
+library(nlme)
+
+## fit model
+mod1 <- lme()
+```
+
+
+Uh oh, looks like we have some missing values in our data and `lme()` doesn't perform listwise deletion like `lmer` does. Unfortunately, the error doesn't tell us *where* the problem is in our data. Use `apply()` and `anyNA()` to figure out where we should start looking.
+
+```{r}
+apply(dat, 2, anyNA)
+```
+
+
+It looks there are missing values for `state`, `region`, and `population`. This means that there aren't any issues with our voting data, but something is going wrong with our region and population data. Since we join the region data before joining the population data, let's start there.
+
+```{r, message = F, warning = F}
+
+dat <- vote %>% left_join(regions)
+
+## list missing states
+dat$state[is.na(dat$State.Code)]
+```
+
+
+Our voting data have an extra trailing space for Rhode Island and Utah. `left_join()` uses exact string matching, so this extra space is causing a problem. Look up the `sub()` function by typing `?sub`. How can we use this to fix our data ensure that all our data get properly merged.
+
+```{r, warning = F, message = F}
+## drop trailing spaces in RI and UT
+vote <- vote %>% mutate(state = sub(______))
+
+## merge data
+dat <- vote %>% left_join(regions) %>% select(-state) %>%
+  rename(state = State.Code) %>% left_join(pop)
+#saveRDS(dat, "lab_data.rds")
+
+## check for NAs again
+apply(dat, 2, anyNA)
+```
+
+Now we're good and can go ahead and estimate our model.
+
+```{r, results = 'asis'}
+library(stargazer) #for latex tables
+
+mod1 <- lme(____)
+
+stargazer(mod1)
+```
+
+
+While `nlme` isn't as advanced as `lme4` in a lot of ways, it has certain functionalities that offer much more control over your model. What if we're worried that we not only need a random intercept by year, but that the errors might vary by year? We can account for this possibility with the `varIdent()` function and the `weights` argument to `lme()`.
+
+Re-specify the same model above, but now add in a `weights` argument, where you specify `varIndent()`. In `varIndent` include the same syntax you use for the random intercept.
+
+```{r, results = 'asis'}
+mod2 <- lme(______________,
+           method = "ML")
+#htmlreg(mod2, stars = .05)
+stargazer(mod2)
+```
+
+\newpage
+## Correlation Structures
+
+The previous model assumes that errors are correlated within years, but not between them. Let's take things a step further and fit an explicit time series model to our data. Take a look at what the `correlation` argument to `lme()` does and use the `corAR1()` function to fit a model with a first order autoregressive structure with states as the grouping variable. 
+
+Specify the same model again, but now specify a `correlation` argument using the `corAR1()` function. Within that function, specify a form which varies by both `year` and `state`.
+
+
+```{r, results = 'asis'}
+mod3 <- lme(__________,
+           method = "ML")
+#htmlreg(mod3, stars = .05)
+stargazer(mod3)
+```
+
+
+The default `corStruct` for an `lme` model is compound symmetry, which enforces all of diagonal entries of the variance-covariance matrix to be 0. This is a restrictive assumption, but it matches the assumption used by `lmer()`. Fit the a model with random intercepts by year using both `lmer()` and `lme()` and compare the results.
+
+For you `lme` model, specify that `correlation = corCompSymm()`. For your `lmer` model, specify that `REML = FALSE`.
+
+
+```{r, results = 'asis'}
+library(lme4)
+
+mod_nlme <- lme(________,
+                method = "ML")
+mod_lme4 <- lmer(________,
+                 REML = FALSE)
+
+stargazer(mod_nlme, mod_lme4, column.labels   = c("nlme", "lme"))
+```
+
+
+They're identical! Well, at least the coefficient estimates, standard errors, variances of the random effects, and log-likelihood are identical. AIC and BIC are different because `lmer()` and `lme()` calculate the number of parameters in a model slightly differently, which we can verify by running `AIC(mod_nlme, mod_lme4)` and comparing the degrees of freedom.
+
+\newpage
+## Model Selection
+
+Since there are so many different ways we can specify a mixed effects model (different random intercepts and slopes, different correlation structures, different levels of groups, etc.), it's important to think about how we decide between different specifications. The simplest way is to perform a likelihood ratio test with the `anova()` function. Fit a regular linear model with the same fixed effects as one of your multilevel models and compare the two; remember to list the unrestricted model first!
+
+
+```{r}
+mod_lm <- lm(_______)
+
+anova(mod_lme4, mod_lm)
+```
+
+Our unrestricted model is more likely to have generated the data than our restricted one, so we should definitely be fitting some type of multilevel model to these data. However, 
+
+
+
+```{r, message = F, warning = F}
+## parametric bootstrap of likelihood ratio test
+lme.boot <- function(model_r, model_ur){
+  
+  new_y <<- simulate(model_r, 1)[[1]] # simulate data according to null DGP
+  restricted_dev <- -2 * logLik(update(model_r, new_y ~ .))
+  unrestricted_dev <- -2 * logLik(update(model_ur, new_y ~ .))
+  return(restricted_dev - unrestricted_dev) # LRT under null
+  
+}
+
+## 100 bootstraps
+boot_dev_nre <- replicate(100, expr = lme.boot(mod_lm, mod_lme4))
+
+## the boostrapped approximation: (this is preferred)
+test_stat <- -2 * logLik(mod_lm) - -2 * logLik(mod_lme4)
+mean(boot_dev_nre > test_stat) #approximate p-value
+```
+
+
+
+Not a single bootstrapped likelihood ratio test is greater than our test statistic, so once again our unrestricted model better fits the data than the restricted one. Let's try comparing the first order autoregressive correlation model with the heteroskedastic model.
+
+
+
+```{r, error = T}
+## 100 bootstraps
+boot_dev_nre <- replicate(100, expr = lme.boot(mod2, mod3))
+```
+
+
+
+Unfortunately `simulate.lme()` doesn't allow us to simulate outcomes from models with `corStruct()` correlation structures, so we have to try another option. 
+
+
+
+```{r}
+anova(mod3, mod2)
+```
+
+
+Our unrestricted AR1 model is statistically more likely than the heteroskedastic model.
+
+\newpage
+## Predicted Probabilities
+
+Although `nlme` is great, is has trouble being extended for things like calculating predicted probabilities, particularly for models with complicated correlation structures and multiple groupings. A package that will allow us to do this, however, with mixed effects models is the `brms` package.
+
+The `brms` package is actually Bayesian, and stands (or stans lol) for Bayesian Regression Models using Stan. It fits Bayesian generalized non-linear or linear multivariate models and writes a Stan program in the background to evaluate your model. Having sort of learned Stan this semester, I can tell you this is GREAT and can simplify your life sometimes!
+
+The syntax is pretty similar, below complete the following: Specify a model with the outcome variable `vote`, a fixed effect for `population`, a random intercept for `state` and then a correlation structure by placing relevant variables in the `ar()` argument. 
+
+Check out information about the `ar()` argument [here](https://rdrr.io/cran/brms/man/ar.html). In the `ar()` argument, you specify time (`year`) and a group (`state`), let's keep the default for `p` (1). Call your data, and just specify one chain (but note, normally, you should do at least 2 chains but don't worry about that for now since it will take a while).
+
+
+```{r, eval = F}
+library(brms)
+mod_brms <- brm(_________)
+
+#saveRDS(mod_brms, "mod_brms.RDS")
+```
+
+Alright, now we have our model! Check out the summary. A few good things - we have Rhat values under 1.1 (which means convergence is good). Then it also gives us 95% CREDIBLE intervals (these are not called confidence intervals in Bayes, but credible intervals).
+
+Okay, so, we want to examine how the predicted value for our outcome variable varies with, say, population. Because Bayesian inference already involves sampling, we do not have to do anymore. But, we do need to predict! The below for loop predicts our outcome variable for each row of our data frame, then collects the estimate and credible intervals for each row and throws it in a DF. Then, we plot it!
+```{r}
+mod_brms <- readRDS("mod_brms.RDS")
+#new data frame for predictions
+pred_dat <- dat
+
+pred_dat$est <- rep(NA, nrow(pred_dat))
+pred_dat$Q2.5 <- rep(NA, nrow(pred_dat))
+pred_dat$Q97.5 <- rep(NA, nrow(pred_dat))
+
+for(i in 1:nrow(pred_dat)){
+ pred <- predict(mod_brms, pred_dat[i, ])
+ 
+ pred_dat[i, ]$est <- pred[[1]]
+ pred_dat[i, ]$Q2.5 <- pred[[3]]
+ pred_dat[i, ]$Q97.5 <- pred[[4]]
+  
+}
+
+ggplot(data = pred_dat, aes(x = population, y = est)) + 
+  facet_wrap(~state, nrow=8) +
+  geom_line(aes(x= population, y = est)) + 
+  geom_ribbon(aes(x = population, ymin = Q2.5, ymax = Q97.5), alpha = 0.5)
+```  
+
+We have different predictions now for the effect of population on `vote` for each state. Great.
+
