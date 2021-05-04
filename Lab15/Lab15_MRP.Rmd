@@ -1,0 +1,284 @@
+---
+title: "Multilevel Regression with Poststratification"
+author: "Isabel Laterzo, with code adapted from Rob Williams"
+date: "May 5, 2021"
+header-includes:
+   - \usepackage{amsmath}
+output:
+  hpdf_document:
+
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, cache = T) # code chunks included by default
+options(digits = 2) # round all R output to two digits
+rm(list)
+library(xtable)
+library(knitr)
+setwd("/Users/IsabelLaterzo/Dropbox/Poli784_2021/Labs/Lab15_MRP")
+```
+
+
+
+Multilevel regression with poststratification (MRP) is a technique to obtain estimates of public opinion for subpopulations in specific geographic units that may be undersampled and underrepresented in data. This allows you to both estimate public opinion for these subpopulations, as well as to aggregate all group estimates by geographic unit to obtain estimates of overall public opinion within that unit. This lab is adapted from Kastellac et al.'s working paper [@Kastellec2016] and included example code which generates estimates of support for same sex marriage in each state based on five national polls from 2004.
+
+
+
+```{r, message = F}
+library(lme4) # random effect models
+library(foreign) # read .dta files
+library(arm) # inverse logit function
+```
+
+
+
+
+```{r}
+# read in megapoll
+marriage_data <- read.dta('gay_marriage_megapoll.dta', convert.underscore = TRUE) 
+
+# read in state-level dataset
+Statelevel <- read.dta('state_level_update.dta', convert.underscore = TRUE)
+Statelevel <- Statelevel[order(Statelevel$sstate.initnum), ]
+
+# read in sensus data
+Census <- read.dta('poststratification 2000.dta', convert.underscore = TRUE)
+Census <- Census[order(Census$cstate), ]
+Census$cstate.initnum <-  match(Census$cstate, Statelevel$sstate)
+```
+
+
+We need to create common identifiers in both our 'megapoll' and census data so that we can properly poststratify (weight) our results by using the proportion of each group in each state. Each of these identifiers will be a factor variable which we can use to index random effects when generating our prediction cells later.
+
+
+
+```{r}
+
+# from 1 for white males to 6 for hispanic females
+marriage_data$race.female <- (marriage_data$female * 3) + marriage_data$race.wbh
+
+# from 1 for 18-29 with low edu to 16 for 65+ with high edu
+marriage_data$age.edu.cat <- 4 * (marriage_data$age.cat - 1) + marriage_data$edu.cat
+
+# proportion of evangelicals in respondent's state
+marriage_data$p.evang.full <- Statelevel$p.evang[marriage_data$state.initnum]
+
+# proportion of mormon's in respondent's state
+marriage_data$p.mormon.full <-Statelevel$p.mormon[marriage_data$state.initnum]
+
+# combined evangelical + mormom proportions
+marriage_data$p.relig.full <- marriage_data$p.evang.full + marriage_data$p.mormon.full
+
+# kerry's % of 2-party vote in respondent's state in 2004
+marriage_data$p.kerry.full <- Statelevel$kerry.04[marriage_data$state.initnum]
+
+# same coding as above
+Census$crace.female <- (Census$cfemale * 3) + Census$crace.WBH 
+Census$cage.edu.cat <- 4 * (Census$cage.cat - 1) + Census$cedu.cat 
+Census$cp.evang.full<-  Statelevel$p.evang[Census$cstate.initnum]
+Census$cp.mormon.full <- Statelevel$p.mormon[Census$cstate.initnum]
+Census$cp.relig.full <- Census$cp.evang.full + Census$cp.mormon.full
+Census$cp.kerry.full <-  Statelevel$kerry.04[Census$cstate.initnum]
+```
+
+
+
+Next we run our individual level model to predict whether a given respondent supports marriage equality or not. The response is a function of an intercept term, and various demographic effects, indexed by $i$ for individuals, and $j$, $k$, $l$, $m$, $s$ and $p$ for race and gender combination, age, education, state, and poll respectively. The model also includes an age $\times$ education term. Race-gender, age, and education are all factor variables indicating membership in a specific category.
+
+
+
+$$
+\text{PR}(y = 1 ) = \text{logit}^{-1}(\beta_0 + \alpha_{j[i]}^{race,gender} + \alpha_{k[i]}^{age} + \alpha_{l[i]}^{edu} + \alpha_{k[i],l[i]}^{age:edu} + \alpha_{s[i]}^{state} + \alpha_{p[i]}^{year})
+$$
+
+
+
+The varying group effects are modeled as drawn from a normal distribution with mean zero and an estimated variance:
+
+
+
+$$
+\begin{align}
+\alpha_j^{race,gender} &\sim \mathcal{N}(0, \sigma_{race,gender}^2),~\text{for}~j = 1, \ldots, 6 \\
+\alpha_k^{age} &\sim \mathcal{N}(0, \sigma_{age}^2),~\text{for}~k = 1, \ldots, 4 \\
+\alpha_l^{edu} &\sim \mathcal{N}(0, \sigma_{edu}^2),~\text{for}~l = 1, \ldots, 4 \\
+\alpha_{k,l}^{age:edu} &\sim \mathcal{N}(0, \sigma_{age:edu}^2),~\text{for}~k = 1, \ldots, 4~\text{and}~l = 1, \ldots, 4 \\
+\alpha_m^{region} &\sim \mathcal{N}(0, \sigma_{region}^2),~\text{for}~m = 1, \ldots 5 \\
+\alpha_p^{year} &\sim \mathcal{N}(0, \sigma_{year}^2),~\text{for}~p = 1, \ldots
+\end{align}
+$$
+
+
+
+The state effects are slightly more complicated. Instead of being drawn from a normal distribution with mean zero, these are modeled as being drawn from a normal distribution with a mean that is a function of a linear combination of state-level variables, in this case religiosity and John Kerry's voteshare.
+
+
+$$
+\begin{align}
+\alpha_s^{state} &\sim \mathcal{N}(\mu_{state}, \sigma_{state}^2)~\text{for}~s = 1,\ldots,51 \\
+\mu_{state} &= \alpha_{m[s]}^{region} + \gamma_1 relig_s + \gamma_2 presvote_s
+\end{align}
+$$
+
+Below, write a model with random intercept by `race.female`, `age.cat`, `edu.cat`, `age.edu.cat`, `state`, `region`, and `poll` and fixed effects by `p.relig.full` and `p.kerry.full`. Look at the outcome variable `yes.of.all` - what time of model is most appropriate?
+```{r}
+marriage_data <- na.omit(marriage_data)
+# model with demographic and geographic random effects
+individual_model <- glmer(formula = _____,
+                          data = marriage_data,
+                          family = _________)
+
+#note, you could also nest your states within regions, but it doesn't affect model fit in this case too much.
+individual_model2 <- glmer(_____,
+                                data = _____,
+                          family = _____)
+```
+
+Before moving on, we should check a few things about our individual-level mode. First, how is model fit and its predictive power? Taking us back to the days of AUC/ROC, etc, we'll employ some of those checks again. Let's create and underspecified alternative model for comparison. 
+
+
+```{r}
+#a model leaving out a few variables - race.female and p.relig.full
+alt_model <- glmer(formula = yes.of.all ~ (1 | age.cat)
+                          + ( 1 | edu.cat) + (1 | age.edu.cat) + (1 | state) + (1 | region)
+                          + (1 | poll), data = marriage_data,
+                          family = binomial(link = 'logit'))
+
+library(pROC)
+library(plotROC)
+
+
+roc_prob1 <- _________ #generate predicted probs
+                                          
+marriage_data$roc_prob1 <- _________ #bind them with the original data 
+
+roc_prob2 <- ________ #generate predicted probs for alt model
+                                          
+marriage_data$roc_prob2 <- ______ #bind them with the original data 
+
+#plot! the difference seems small
+plot(pROC::roc(_________, data = marriage_data)) 
+plot(pROC::roc(_________, data = marriage_data)) 
+
+#AUC - difference still small, but AUC is higher for our fully specified model
+pROC::auc(pROC::roc(______, data = marriage_data))
+pROC::auc(pROC::roc(______, data = marriage_data))
+
+```
+
+AIC and BIC too! Below, compare the AIC and BIC of the individual model and the alternative, not great model. Which has better model fit?
+
+```{r}
+## smaller values indicate a better fitting model
+
+```
+
+And just like we have done in the past, there are plenty of other options as well, such as cross validation.
+
+
+Now, let's examine some random effects to see if they match with our expectations.
+
+```{r}
+#pull out the random effects for education and age and put them in a data frame.
+df <- data.frame(Education = ______,
+                 Age = ______)
+colnames(df) <- c('Education', 'Age')
+df
+```
+
+
+
+These certainly do, with increasing education having a positive effect on the probability of supporting marriage equality, and increasing age having a negative effect.
+
+
+We need to create a vector of state random effects because Alaska and Hawaii are not in our data, so we can't just use the state random effects from our individual level model. Instead, we extract the state random effects and then set the missing Alaskan and Hawaiian random effects to zero (the Bayesian in me says that we probably have enough prior information about the political climates in these states to set slight negative and positive random effects, respectively...).
+
+
+```{r}
+# empty vector to hold state random effects
+state_ranefs <- array(NA, c(51, 1))
+
+# set state names as row names
+dimnames(state_ranefs) <- list(c(Statelevel$sstate), 'effect')
+
+# assign state random effects to array while preserving NAs
+for (i in Statelevel$sstate) {
+  
+    state_ranefs[i, ] <- ____________[i, 1]
+    
+}
+
+# set states with missing REs (b/c not in data) to zero
+state_ranefs[, 1][is.na(state_ranefs[, 1])] <- 0
+```
+
+
+Next we need to create a 'prediction cell' for every possible combination of demographic-state effects in our *census* data. We have 96 possible demographic combinations $\times$ 51 states = 4896 cells. This step is exactly like creating a hypothetical variable profile for simulation based predicted probabilities, except that instead of varying one variable and holding all others at their central tendency or a meaningful quantity, we are varying *all* variables to get the predicted probability of every demographic combination in every state supporting marriage equality.
+
+
+
+```{r}
+# create a prediction for each cell in Census data
+cellpred <- invlogit(fixef(individual_model)['(Intercept)']
+                     + ranef(individual_model)$race.female[Census$crace.female, 1]
+                     + ranef(individual_model)$age.cat[Census$cage.cat, 1]
+                     + ranef(individual_model)$edu.cat[Census$cedu.cat, 1]
+                     + ranef(individual_model)$age.edu.cat[Census$cage.edu.cat, 1]
+                     + state_ranefs[Census$cstate, 1]
+                     + ranef(individual_model)$region[Census$cregion, 1]
+                     + (fixef(individual_model)['p.relig.full'] * Census$cp.relig.full)
+                     + (fixef(individual_model)['p.kerry.full'] * Census$cp.kerry.full))
+
+#note, depending on the structure of your data, you can also often just use the
+#predict function, but notice here that the Census df and model df do
+#not have the same variable names
+```
+
+We then weight each cell's predicted probability by the proportion of each state's population that it represents.
+
+```{r}
+# weight each cell's prediction by its frequency w/in its state
+cellpredweighted <- cellpred * Census$cpercent.state
+```
+
+
+Finally, aggregate each demographic category's proportion of supporters by state, and multiply by 100 to obtain the percent of people in each state estimated to support marriage equality.
+
+
+```{r, fig.align = 'center', fig.width = 10, fig.height = 8, out.width = '100%', warning = F, message = F}
+# sum all weighted cell predictions by state, and convert to percent
+statepred <- 100 * as.vector(tapply(cellpredweighted,Census$cstate,sum))
+
+# collect states, estimates, and proportion religious
+est_gg <- data.frame(State = Statelevel$sstate,
+           Estimate = statepred,
+           Religion = Statelevel$p.evang + Statelevel$p.mormon)
+
+# present estimates by state in datafame, minus religion
+est_gg[, -3]
+
+library(ggplot2) # plots
+#install.packages("plotly")
+#library(plotly) # interactive plots
+
+# plot estimates, colored by religion
+#use x = reorder(State, Estimate)
+# y = estimate
+#label by state
+
+```
+
+
+
+## Individual Exercise
+
+
+Use the simulation approach to generate point estimates and 95\% confidence intervals for the proportion of people within each state supporting marriage equality. Use at least 10 simulations.
+
+
+Hint: the `simulate()` function is your friend because it has a method for objects of class `merMod`, which allows it to simulate new responses from the fitted model object -- but be sure to account for the random effects in the model. You want to carry out the MRP process multiple times, substituting in a different simulated outcome vector each time. You can accomplish this either with a loop, or through a series of calls to `apply()` with anonymous functions.
+
+
+
+
